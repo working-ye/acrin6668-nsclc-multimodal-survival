@@ -1,4 +1,4 @@
-# Strict held-out multimodal survival modeling for ACRIN 6668/RTOG 0235
+# multimodal survival modeling for ACRIN 6668/RTOG 0235
 
 [![CI](https://github.com/working-ye/acrin6668-nsclc-multimodal-survival/actions/workflows/ci.yml/badge.svg)](https://github.com/working-ye/acrin6668-nsclc-multimodal-survival/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
