@@ -9,7 +9,7 @@ or portability are welcome.
 4. Do not include patient data, model artifacts, predictions, credentials,
    institution-specific paths, or unpublished manuscript results.
 5. Document any change to outcome handling, feature selection, preprocessing,
-   tuning, censoring, metrics, or leakage guards in `CHANGELOG.md`.
+   tuning, censoring, or metrics in `CHANGELOG.md`.
 
 Changes that alter statistical estimates require a new locked run, updated
 manifest, independent review, and a new tagged release. They must not silently

@@ -37,14 +37,14 @@ def harrell_cindex(frame: pd.DataFrame, risk: np.ndarray) -> float:
 
 
 def uno_cindex(
-    development_outcome: np.ndarray,
+    training_outcome: np.ndarray,
     validation: pd.DataFrame,
     risk: np.ndarray,
     horizon_days: float,
 ) -> tuple[float, float, str]:
     validation_outcome = make_survival_outcome(validation)
     support_upper = min(
-        float(np.max(development_outcome["time"])),
+        float(np.max(training_outcome["time"])),
         float(np.max(validation_outcome["time"])),
     )
     tau = float(np.nextafter(float(horizon_days), np.inf))
@@ -53,7 +53,7 @@ def uno_cindex(
     try:
         value = float(
             concordance_index_ipcw(
-                development_outcome, validation_outcome, np.asarray(risk), tau=tau
+                training_outcome, validation_outcome, np.asarray(risk), tau=tau
             )[0]
         )
     except (ValueError, ZeroDivisionError):
@@ -86,14 +86,14 @@ def bootstrap_harrell_cindex(
 
 
 def _adjust_evaluation_time(
-    requested: float, development_outcome: np.ndarray, validation_outcome: np.ndarray
+    requested: float, training_outcome: np.ndarray, validation_outcome: np.ndarray
 ) -> float | None:
     lower = max(
-        float(np.min(development_outcome["time"])),
+        float(np.min(training_outcome["time"])),
         float(np.min(validation_outcome["time"])),
     )
     upper = min(
-        float(np.max(development_outcome["time"])),
+        float(np.max(training_outcome["time"])),
         float(np.max(validation_outcome["time"])),
     )
     requested = float(requested)
@@ -106,7 +106,7 @@ def _adjust_evaluation_time(
 
 
 def dynamic_auc_table(
-    development_outcome: np.ndarray,
+    training_outcome: np.ndarray,
     validation: pd.DataFrame,
     risk: np.ndarray,
     requested_times: Sequence[int],
@@ -116,13 +116,13 @@ def dynamic_auc_table(
     validation_outcome = make_survival_outcome(validation)
     risk = np.asarray(risk, dtype=float)
     censoring_km = KaplanMeierFitter().fit(
-        development_outcome["time"],
-        event_observed=~development_outcome["event"],
+        training_outcome["time"],
+        event_observed=~training_outcome["event"],
     )
     rows = []
     for offset, requested in enumerate(requested_times):
         evaluation_time = _adjust_evaluation_time(
-            requested, development_outcome, validation_outcome
+            requested, training_outcome, validation_outcome
         )
         auc = float("nan")
         bootstrap_values = []
@@ -146,7 +146,7 @@ def dynamic_auc_table(
         if status == "ok":
             try:
                 auc_values, _ = cumulative_dynamic_auc(
-                    development_outcome,
+                    training_outcome,
                     validation_outcome,
                     risk,
                     np.asarray([evaluation_time]),
@@ -163,7 +163,7 @@ def dynamic_auc_table(
                     indices = rng.integers(0, len(validation), len(validation))
                     try:
                         values, _ = cumulative_dynamic_auc(
-                            development_outcome,
+                            training_outcome,
                             validation_outcome[indices],
                             risk[indices],
                             np.asarray([evaluation_time]),
@@ -181,7 +181,7 @@ def dynamic_auc_table(
                 "control_count": controls,
                 "censored_before_time": censored_before,
                 "number_at_risk": number_at_risk,
-                "development_censoring_survival": censoring_survival,
+                "training_censoring_survival": censoring_survival,
                 "cumulative_dynamic_auc": auc,
                 "ci95_low": (
                     float(np.quantile(bootstrap_values, 0.025))
@@ -200,7 +200,7 @@ def dynamic_auc_table(
 
 
 def brier_table(
-    development_outcome: np.ndarray,
+    training_outcome: np.ndarray,
     validation: pd.DataFrame,
     survival_probabilities: np.ndarray,
     requested_times: Sequence[int],
@@ -210,7 +210,7 @@ def brier_table(
     columns = []
     status_rows = []
     for index, requested in enumerate(requested_times):
-        adjusted = _adjust_evaluation_time(requested, development_outcome, validation_outcome)
+        adjusted = _adjust_evaluation_time(requested, training_outcome, validation_outcome)
         if adjusted is not None:
             adjusted_times.append(adjusted)
             columns.append(index)
@@ -228,7 +228,7 @@ def brier_table(
     estimates = np.asarray(survival_probabilities, dtype=float)[:, columns]
     try:
         _, scores = brier_score(
-            development_outcome,
+            training_outcome,
             validation_outcome,
             estimates,
             np.asarray(adjusted_times),
@@ -249,7 +249,7 @@ def brier_table(
         try:
             integrated = float(
                 integrated_brier_score(
-                    development_outcome,
+                    training_outcome,
                     validation_outcome,
                     estimates,
                     np.asarray(adjusted_times),

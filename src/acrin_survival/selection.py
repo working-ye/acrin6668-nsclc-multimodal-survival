@@ -1,4 +1,4 @@
-"""Outcome-aware feature screening confined to development data or CV training folds."""
+"""Outcome-aware feature screening confined to training data and CV folds."""
 
 from __future__ import annotations
 
@@ -44,8 +44,7 @@ def select_top_features(
 ) -> FeatureSelectionResult:
     """Rank by univariable C-index and remove highly correlated features.
 
-    This function must only receive a development dataset or an internal-CV
-    training fold. The independent validation dataset is never an argument.
+    This function receives a training table or an internal-CV training fold.
     """
 
     candidate_list = list(candidates)

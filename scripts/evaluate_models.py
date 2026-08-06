@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Evaluate already-frozen survival predictions."""
+"""Evaluate frozen predictions for TCIA internal validation."""
 
 from __future__ import annotations
 

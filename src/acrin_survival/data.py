@@ -10,7 +10,7 @@ from typing import Any, Dict, Iterable, List
 import numpy as np
 import pandas as pd
 
-from .audit import normalize_patient_id
+from .provenance import normalize_patient_id
 
 
 class DataSchemaError(ValueError):
@@ -27,7 +27,6 @@ class CohortSchema:
     radiomics_prefixes: tuple[str, ...]
     deep_feature_prefixes: tuple[str, ...]
     feature_encodings: Dict[str, Dict[str, Any]]
-    identity_columns: tuple[str, ...]
 
     @classmethod
     def from_config(cls, config: Dict[str, Any]) -> CohortSchema:
@@ -41,7 +40,6 @@ class CohortSchema:
             radiomics_prefixes=tuple(map(str, schema["radiomics_prefixes"])),
             deep_feature_prefixes=tuple(map(str, schema["deep_feature_prefixes"])),
             feature_encodings=dict(schema.get("feature_encodings", {})),
-            identity_columns=tuple(map(str, schema.get("identity_columns", []))),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -54,7 +52,6 @@ class CohortSchema:
             "radiomics_prefixes": list(self.radiomics_prefixes),
             "deep_feature_prefixes": list(self.deep_feature_prefixes),
             "feature_encodings": self.feature_encodings,
-            "identity_columns": list(self.identity_columns),
         }
 
 
@@ -126,8 +123,7 @@ def read_feature_table(
     missing = sorted(required.difference(header.columns))
     if missing:
         raise DataSchemaError(f"Prediction columns are missing from {source.name}: {missing}")
-    optional_identity = [column for column in schema.identity_columns if column in header.columns]
-    use_columns = sorted(required.union(optional_identity))
+    use_columns = sorted(required)
     frame = pd.read_csv(
         source,
         usecols=use_columns,

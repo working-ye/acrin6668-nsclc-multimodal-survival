@@ -16,12 +16,6 @@ schema:
     - rad_peri5_
   deep_feature_prefixes:
     - dl_swin_
-  # Optional fingerprints catch renamed images or repeated scans across splits.
-  identity_columns:
-    - study_instance_uid
-    - series_instance_uid
-    - image_sha256
-    - roi_sha256
   feature_encodings:
     baseline_zubrod_performance_status:
       type: leading_integer

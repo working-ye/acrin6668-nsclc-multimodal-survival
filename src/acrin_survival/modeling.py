@@ -6,7 +6,7 @@ import json
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence
 
 import joblib
 import numpy as np
@@ -16,7 +16,6 @@ from sklearn.model_selection import KFold, ParameterGrid, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sksurv.ensemble import RandomSurvivalForest
 
-from .audit import patient_id_digest
 from .data import (
     CohortSchema,
     candidate_feature_columns,
@@ -35,7 +34,7 @@ MODEL_DISPLAY_NAMES = {
 
 @dataclass
 class FrozenModelBundle:
-    """Everything needed for prediction, with no validation-derived state."""
+    """Everything needed to apply a trained model and compute validation metrics."""
 
     format_version: str
     model_name: str
@@ -49,11 +48,8 @@ class FrozenModelBundle:
     scaler: StandardScaler
     estimator: RandomSurvivalForest
     training_risk_cutoff: float
-    training_patient_ids: Tuple[str, ...]
-    training_patient_digest: str
-    training_identity_values: Dict[str, Tuple[str, ...]]
-    development_outcome: np.ndarray
-    development_file_sha256: str
+    training_outcome: np.ndarray
+    training_file_sha256: str
     config_file_sha256: str
     random_seed: int
 
@@ -74,7 +70,7 @@ def stable_seed(base_seed: int, *parts: str) -> int:
 
 def _adaptive_cv_splits(frame: pd.DataFrame, n_splits: int, seed: int):
     if len(frame) < n_splits:
-        raise ValueError(f"Development n={len(frame)} is smaller than CV folds={n_splits}.")
+        raise ValueError(f"Training n={len(frame)} is smaller than CV folds={n_splits}.")
     event = frame["event"].astype(int)
     ranks = frame["time_days"].rank(method="first")
     bins = pd.qcut(ranks, q=min(4, len(frame)), labels=False, duplicates="drop")
@@ -177,7 +173,7 @@ def _safe_score(estimator: RandomSurvivalForest, x: np.ndarray, frame: pd.DataFr
 
 
 def tune_hyperparameters(
-    development: pd.DataFrame,
+    training: pd.DataFrame,
     schema: CohortSchema,
     config: Dict[str, Any],
     model_name: str,
@@ -188,13 +184,13 @@ def tune_hyperparameters(
     cv_seed = int(training_config["cross_validation_seed"])
     model_seed = stable_seed(cv_seed, model_name, "cv")
     splits = _adaptive_cv_splits(
-        development, int(training_config["cross_validation_folds"]), model_seed
+        training, int(training_config["cross_validation_folds"]), model_seed
     )
 
     prepared_folds = []
     for fold_index, (training_index, validation_index) in enumerate(splits):
-        fold_training = development.iloc[training_index].copy()
-        fold_validation = development.iloc[validation_index].copy()
+        fold_training = training.iloc[training_index].copy()
+        fold_validation = training.iloc[validation_index].copy()
         radiomics_result, deep_result = _select_modalities(
             fold_training, schema, config, model_name
         )
@@ -259,37 +255,31 @@ def tune_hyperparameters(
 
 
 def train_model(
-    development: pd.DataFrame,
+    training: pd.DataFrame,
     schema: CohortSchema,
     config: Dict[str, Any],
     model_name: str,
-    development_sha256: str,
+    training_sha256: str,
     config_sha256: str,
 ) -> ModelTrainingResult:
-    best_params, tuning = tune_hyperparameters(development, schema, config, model_name)
-    radiomics_result, deep_result = _select_modalities(development, schema, config, model_name)
+    best_params, tuning = tune_hyperparameters(training, schema, config, model_name)
+    radiomics_result, deep_result = _select_modalities(training, schema, config, model_name)
     selected_radiomics = radiomics_result.selected if radiomics_result else []
     selected_deep = deep_result.selected if deep_result else []
     features = model_features(model_name, schema, selected_radiomics, selected_deep)
-    numeric = numeric_feature_frame(development, features, schema)
+    numeric = numeric_feature_frame(training, features, schema)
     imputer = SimpleImputer(strategy="median", keep_empty_features=False)
     scaler = StandardScaler()
-    x_development = scaler.fit_transform(imputer.fit_transform(numeric))
-    if x_development.shape[1] != len(features):
-        raise ValueError("A final model input was entirely missing in the development cohort.")
+    x_training = scaler.fit_transform(imputer.fit_transform(numeric))
+    if x_training.shape[1] != len(features):
+        raise ValueError("A final model input was entirely missing in the training table.")
 
     model_seed = int(config["training"]["model_random_seeds"][model_name])
     estimator = _build_estimator(best_params, model_seed, int(config["training"]["n_jobs"]))
-    estimator.fit(x_development, make_survival_outcome(development))
-    development_risk = np.asarray(estimator.predict(x_development), dtype=float)
-    cutoff = float(np.median(development_risk))
+    estimator.fit(x_training, make_survival_outcome(training))
+    training_risk = np.asarray(estimator.predict(x_training), dtype=float)
+    cutoff = float(np.median(training_risk))
 
-    ids = tuple(development[schema.id_column].astype(str).tolist())
-    identity_values = {
-        column: tuple(development[column].dropna().astype(str).tolist())
-        for column in schema.identity_columns
-        if column in development.columns
-    }
     bundle = FrozenModelBundle(
         format_version="1.0",
         model_name=model_name,
@@ -303,11 +293,8 @@ def train_model(
         scaler=scaler,
         estimator=estimator,
         training_risk_cutoff=cutoff,
-        training_patient_ids=ids,
-        training_patient_digest=patient_id_digest(ids),
-        training_identity_values=identity_values,
-        development_outcome=make_survival_outcome(development),
-        development_file_sha256=development_sha256,
+        training_outcome=make_survival_outcome(training),
+        training_file_sha256=training_sha256,
         config_file_sha256=config_sha256,
         random_seed=model_seed,
     )
@@ -318,8 +305,8 @@ def train_model(
             {
                 "model_name": model_name,
                 "variable": feature,
-                "development_missing_fraction": float(numeric[feature].isna().mean()),
-                "development_variance": float(numeric[feature].var(skipna=True)),
+                "training_missing_fraction": float(numeric[feature].isna().mean()),
+                "training_variance": float(numeric[feature].var(skipna=True)),
             }
         )
     empty_ranking = pd.DataFrame(
@@ -350,10 +337,10 @@ def transform_with_bundle(bundle: FrozenModelBundle, frame: pd.DataFrame) -> np.
     numeric = numeric_feature_frame(frame, bundle.feature_columns, bundle.schema)
     entirely_missing = numeric.columns[numeric.isna().all()].tolist()
     if entirely_missing:
-        raise ValueError(f"Validation features are entirely missing: {entirely_missing}")
+        raise ValueError(f"TCIA validation features are entirely missing: {entirely_missing}")
     transformed = bundle.scaler.transform(bundle.imputer.transform(numeric))
     if not np.isfinite(transformed).all():
-        raise ValueError("Validation transformation produced non-finite values.")
+        raise ValueError("TCIA validation transformation produced non-finite values.")
     return transformed
 
 

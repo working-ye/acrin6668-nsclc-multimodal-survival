@@ -1,5 +1,5 @@
 study:
-  name: Synthetic leakage-control demonstration
+  name: Synthetic TCIA internal validation demonstration
   endpoint: 36-month overall survival
   horizon_days: 1095
 
@@ -13,7 +13,6 @@ schema:
     - ss_metastatic_disease_present_on_pet_before_rt
   radiomics_prefixes: [rad_tumor_, rad_peri5_]
   deep_feature_prefixes: [dl_swin_]
-  identity_columns: [study_instance_uid, series_instance_uid, image_sha256, roi_sha256]
   feature_encodings:
     baseline_zubrod_performance_status:
       type: leading_integer

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Run the separated prediction/evaluation validation workflow."""
+"""Run TCIA internal prediction and evaluation."""
 
 from __future__ import annotations
 

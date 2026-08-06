@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Apply frozen models without loading survival outcomes."""
+"""Apply frozen models to a TCIA feature table without loading outcomes."""
 
 from __future__ import annotations
 

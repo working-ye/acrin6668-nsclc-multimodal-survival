@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "acrin-nsclc-survival"
-version = "0.1.0"
-description = "Leakage-resistant multimodal survival modeling for the ACRIN 6668/RTOG 0235 secondary analysis."
+version = "0.1.1"
+description = "Multimodal survival model training and TCIA internal validation for the ACRIN 6668/RTOG 0235 secondary analysis."
 readme = "README.md"
 requires-python = ">=3.9,<3.13"
 license = {file = "LICENSE"}

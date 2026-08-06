@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Build frozen CP/CPR/CPRD/RD models from development data only."""
+"""Train frozen CP/CPR/CPRD/RD models from the training table."""
 
 from __future__ import annotations
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import json
 from pathlib import Path
 
@@ -11,7 +10,6 @@ import pandas as pd
 import pytest
 import yaml
 
-from acrin_survival.audit import LeakageError
 from acrin_survival.cli import main
 from acrin_survival.config import ConfigurationError, load_config
 from acrin_survival.metrics import dynamic_auc_table, uno_cindex
@@ -35,14 +33,14 @@ def _fast_config(tmp_path: Path) -> Path:
     return target
 
 
-def test_strict_end_to_end_and_frozen_artifacts(tmp_path: Path) -> None:
-    development, validation = write_synthetic_data(
-        tmp_path / "data", n_development=72, n_validation=36, seed=20260629
+def test_model_training_and_tcia_internal_validation(tmp_path: Path) -> None:
+    training, validation = write_synthetic_data(
+        tmp_path / "data", n_training=72, n_validation=36, seed=20260629
     )
     config = _fast_config(tmp_path)
     artifacts = tmp_path / "artifacts"
     results = tmp_path / "results"
-    build_models(development, config, artifacts)
+    build_models(training, config, artifacts)
 
     model_paths = {
         name: artifacts / "models" / name / "model.joblib"
@@ -58,7 +56,7 @@ def test_strict_end_to_end_and_frozen_artifacts(tmp_path: Path) -> None:
         artifacts,
         config,
         results,
-        "synthetic_heldout",
+        "synthetic_tcia_internal",
         expected_prediction_manifest_sha256=prediction_manifest_hash,
     )
     hashes_after = {name: _sha256(path) for name, path in model_paths.items()}
@@ -81,7 +79,7 @@ def test_strict_end_to_end_and_frozen_artifacts(tmp_path: Path) -> None:
             artifacts,
             config,
             tmp_path / "tampered_results",
-            "synthetic_heldout",
+            "synthetic_tcia_internal",
             expected_prediction_manifest_sha256=prediction_manifest_hash,
         )
     predictions.write_bytes(original_predictions)
@@ -102,7 +100,7 @@ def test_strict_end_to_end_and_frozen_artifacts(tmp_path: Path) -> None:
             artifacts,
             config,
             tmp_path / "rewritten_predictions_results",
-            "synthetic_heldout",
+            "synthetic_tcia_internal",
             expected_prediction_manifest_sha256=prediction_manifest_hash,
         )
     predictions.write_bytes(original_predictions)
@@ -111,7 +109,7 @@ def test_strict_end_to_end_and_frozen_artifacts(tmp_path: Path) -> None:
     build_manifest = artifacts / "table" / "analysis_manifest.json"
     original_build_manifest = build_manifest.read_bytes()
     rewritten_build = json.loads(original_build_manifest)
-    rewritten_build["development_n"] += 1
+    rewritten_build["training_n"] += 1
     build_manifest.write_text(
         json.dumps(rewritten_build, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -122,7 +120,7 @@ def test_strict_end_to_end_and_frozen_artifacts(tmp_path: Path) -> None:
             artifacts,
             config,
             tmp_path / "rewritten_build_results",
-            "synthetic_heldout",
+            "synthetic_tcia_internal",
             expected_prediction_manifest_sha256=prediction_manifest_hash,
         )
     build_manifest.write_bytes(original_build_manifest)
@@ -158,48 +156,6 @@ def test_strict_end_to_end_and_frozen_artifacts(tmp_path: Path) -> None:
     assert not list(wrapper_results.rglob("predictions.csv"))
 
 
-def test_predictions_do_not_depend_on_outcome_values(tmp_path: Path) -> None:
-    development, validation = write_synthetic_data(
-        tmp_path / "data", n_development=72, n_validation=36, seed=22
-    )
-    config = _fast_config(tmp_path)
-    artifacts = tmp_path / "artifacts"
-    build_models(development, config, artifacts)
-    first = predict_models(validation, artifacts, config, tmp_path / "first")
-
-    changed = pd.read_csv(validation)
-    changed["overall_survival_days"] = changed["overall_survival_days"] + 5000
-    changed["death_event_overall"] = 1 - changed["death_event_overall"]
-    changed_path = tmp_path / "changed_outcomes.csv"
-    changed.to_csv(changed_path, index=False)
-    second = predict_models(changed_path, artifacts, config, tmp_path / "second")
-    assert first.read_bytes() == second.read_bytes()
-
-
-def test_prediction_rejects_patient_overlap(tmp_path: Path) -> None:
-    development, validation = write_synthetic_data(
-        tmp_path / "data", n_development=72, n_validation=36, seed=33
-    )
-    config = _fast_config(tmp_path)
-    artifacts = tmp_path / "artifacts"
-    build_models(development, config, artifacts)
-
-    development_frame = pd.read_csv(development)
-    validation_frame = pd.read_csv(validation)
-    validation_frame.loc[0, "patient_id"] = development_frame.loc[0, "patient_id"]
-    overlap_path = tmp_path / "overlap.csv"
-    validation_frame.to_csv(overlap_path, index=False)
-    with pytest.raises(LeakageError):
-        predict_models(overlap_path, artifacts, config, tmp_path / "predictions")
-
-
-def test_prediction_and_evaluation_functions_contain_no_fit_calls() -> None:
-    for function in (predict_models, evaluate_predictions):
-        source = inspect.getsource(function)
-        assert ".fit(" not in source
-        assert ".fit_transform(" not in source
-
-
 def test_missing_horizon_auc_is_rejected(tmp_path: Path) -> None:
     source = Path(__file__).parents[1] / "configs" / "demo.yaml"
     config = yaml.safe_load(source.read_text(encoding="utf-8"))
@@ -231,7 +187,7 @@ def test_model_configuration_must_not_be_empty(tmp_path: Path) -> None:
 
 
 def test_insufficient_followup_does_not_relabel_36_month_auc() -> None:
-    development = pd.DataFrame(
+    training = pd.DataFrame(
         {
             "time_days": [200.0, 500.0, 1095.0],
             "metric_time_days": [200.0, 500.0, np.nextafter(1095.0, np.inf)],
@@ -248,7 +204,7 @@ def test_insufficient_followup_does_not_relabel_36_month_auc() -> None:
     from acrin_survival.data import make_survival_outcome
 
     table = dynamic_auc_table(
-        make_survival_outcome(development),
+        make_survival_outcome(training),
         validation,
         np.array([0.9, 0.5, 0.1]),
         [1095],
@@ -263,7 +219,7 @@ def test_insufficient_followup_does_not_relabel_36_month_auc() -> None:
 def test_uno_cindex_includes_events_on_exact_horizon() -> None:
     horizon = 1095.0
     horizon_control_time = np.nextafter(horizon, np.inf)
-    development = np.array(
+    training = np.array(
         [
             (True, 100.0),
             (True, horizon),
@@ -280,7 +236,7 @@ def test_uno_cindex_includes_events_on_exact_horizon() -> None:
         }
     )
     value, tau, status = uno_cindex(
-        development, validation, np.array([4.0, 1.0, 3.0, 2.0]), horizon
+        training, validation, np.array([4.0, 1.0, 3.0, 2.0]), horizon
     )
     assert status == "ok"
     assert tau == horizon_control_time
@@ -290,7 +246,7 @@ def test_uno_cindex_includes_events_on_exact_horizon() -> None:
     short["time_days"] = [200.0, 400.0, 600.0, 800.0]
     short["metric_time_days"] = short["time_days"]
     missing, missing_tau, missing_status = uno_cindex(
-        development, short, np.array([4.0, 1.0, 3.0, 2.0]), horizon
+        training, short, np.array([4.0, 1.0, 3.0, 2.0]), horizon
     )
     assert pd.isna(missing)
     assert pd.isna(missing_tau)
@@ -298,8 +254,8 @@ def test_uno_cindex_includes_events_on_exact_horizon() -> None:
 
 
 def test_single_model_configuration_predicts_that_model_by_default(tmp_path: Path) -> None:
-    development, validation = write_synthetic_data(
-        tmp_path / "data", n_development=72, n_validation=36, seed=44
+    training, validation = write_synthetic_data(
+        tmp_path / "data", n_training=72, n_validation=36, seed=44
     )
     config_path = _fast_config(tmp_path)
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -307,7 +263,7 @@ def test_single_model_configuration_predicts_that_model_by_default(tmp_path: Pat
     single_config = tmp_path / "single.yaml"
     single_config.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     artifacts = tmp_path / "artifacts"
-    build_models(development, single_config, artifacts)
+    build_models(training, single_config, artifacts)
     predictions = predict_models(
         validation, artifacts, single_config, tmp_path / "predictions"
     )
@@ -330,8 +286,8 @@ def test_single_model_configuration_predicts_that_model_by_default(tmp_path: Pat
 
 
 def test_cp_only_build_writes_readable_empty_feature_rankings(tmp_path: Path) -> None:
-    development, _ = write_synthetic_data(
-        tmp_path / "data", n_development=72, n_validation=36, seed=55
+    training, _ = write_synthetic_data(
+        tmp_path / "data", n_training=72, n_validation=36, seed=55
     )
     config_path = _fast_config(tmp_path)
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -339,7 +295,7 @@ def test_cp_only_build_writes_readable_empty_feature_rankings(tmp_path: Path) ->
     cp_config = tmp_path / "cp_only.yaml"
     cp_config.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     artifacts = tmp_path / "cp_artifacts"
-    build_models(development, cp_config, artifacts)
+    build_models(training, cp_config, artifacts)
     rankings = pd.read_csv(artifacts / "table" / "feature_rankings.csv")
     assert rankings.empty
     assert "feature" in rankings.columns

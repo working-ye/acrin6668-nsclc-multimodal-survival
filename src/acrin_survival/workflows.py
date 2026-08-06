@@ -11,16 +11,6 @@ import numpy as np
 import pandas as pd
 
 from . import __version__
-from .audit import (
-    assert_disjoint_identity_values,
-    assert_disjoint_ids,
-    environment_snapshot,
-    git_commit,
-    normalize_patient_id,
-    patient_id_digest,
-    sha256_file,
-    write_json,
-)
 from .config import load_config
 from .data import (
     CohortSchema,
@@ -49,6 +39,13 @@ from .modeling import (
     train_model,
 )
 from .plotting import plot_calibration, plot_km_risk_groups, plot_time_dependent_auc
+from .provenance import (
+    environment_snapshot,
+    git_commit,
+    normalize_patient_id,
+    sha256_file,
+    write_json,
+)
 
 
 def _utc_now() -> str:
@@ -110,15 +107,15 @@ def _brier_time_grid(config: dict) -> list[int]:
 
 
 def build_models(
-    development_csv: str | Path,
+    training_csv: str | Path,
     config_path: str | Path,
     output_dir: str | Path,
 ) -> Path:
-    """Build all requested models without accepting a validation-data argument."""
+    """Train all requested models from the supplied training table."""
 
     config = load_config(config_path)
     schema = CohortSchema.from_config(config)
-    development_source = Path(development_csv).resolve()
+    training_source = Path(training_csv).resolve()
     config_source = Path(config_path).resolve()
     output = _prepare_clean_output(output_dir)
     table_dir = output / "table"
@@ -126,16 +123,16 @@ def build_models(
     table_dir.mkdir(parents=True, exist_ok=True)
     model_dir.mkdir(parents=True, exist_ok=True)
 
-    development = read_cohort(development_source, schema)
-    if float(development["metric_time_days"].max()) <= float(schema.horizon_days):
+    training = read_cohort(training_source, schema)
+    if float(training["metric_time_days"].max()) <= float(schema.horizon_days):
         raise ValueError(
-            "Development follow-up does not support the configured horizon: at least one "
+            "Training follow-up does not support the configured horizon: at least one "
             "event-free patient must be observed through the horizon."
         )
     top_k = int(config["feature_selection"]["top_k_per_imaging_modality"])
     if any(model != "CP" for model in config["models"]):
-        validate_feature_families(development, schema, top_k)
-    development_hash = sha256_file(development_source)
+        validate_feature_families(training, schema, top_k)
+    training_hash = sha256_file(training_source)
     config_hash = sha256_file(config_source)
 
     results = {}
@@ -146,11 +143,11 @@ def build_models(
     selected_rows = []
     for model_name in config["models"]:
         result = train_model(
-            development,
+            training,
             schema,
             config,
             model_name,
-            development_hash,
+            training_hash,
             config_hash,
         )
         results[model_name] = result
@@ -179,7 +176,7 @@ def build_models(
                     "modality": modality,
                     "feature": feature,
                     "selection_source": (
-                        "development_only"
+                        "training_only"
                         if modality != "clinical_pet_prespecified"
                         else "protocol_configuration"
                     ),
@@ -190,8 +187,8 @@ def build_models(
                 "model_name": model_name,
                 "display_name": result.bundle.display_name,
                 "algorithm": "random_survival_forest",
-                "n_development": len(development),
-                "event_count_development": int(development["event"].sum()),
+                "n_training": len(training),
+                "event_count_training": int(training["event"].sum()),
                 "input_count": len(result.bundle.feature_columns),
                 "radiomics_count": len(result.bundle.selected_radiomics),
                 "deep_feature_count": len(result.bundle.selected_deep_features),
@@ -248,41 +245,28 @@ def build_models(
     _write_csv(inputs, table_dir / "input_variable_summary.csv")
 
     manifest = {
-        "workflow": "strict_heldout_model_building",
+        "workflow": "model_training",
         "software_version": __version__,
         "created_at_utc": _utc_now(),
         "study": config["study"],
         "models": config["models"],
-        "development_n": len(development),
-        "development_event_count": int(development["event"].sum()),
-        "development_patient_digest_sha256": patient_id_digest(
-            development[schema.id_column]
-        ),
-        "development_file_sha256": development_hash,
+        "training_n": len(training),
+        "training_event_count": int(training["event"].sum()),
+        "training_file_sha256": training_hash,
         "config_file_sha256": config_hash,
         "git_commit": git_commit(_repo_root()),
         "environment": environment_snapshot(),
-        "leakage_controls": {
-            "validation_data_argument_accepted_by_builder": False,
-            "feature_selection_scope": "each internal-CV training fold; then full development",
-            "imputation_scope": "each internal-CV training fold; then full development",
-            "scaling_scope": "each internal-CV training fold; then full development",
-            "hyperparameter_selection_scope": "development-only cross-validation",
-            "risk_cutoff_source": "full-development median risk",
-            "patient_level_artifacts_publishable": False,
-        },
         "artifact_sha256": dict(zip(registry["model_name"], registry["artifact_sha256"])),
     }
     write_json(manifest, table_dir / "analysis_manifest.json")
     summary = [
         "# Model-building summary",
         "",
-        f"- Development cohort: n={len(development)}; 36-month events={int(development['event'].sum())}.",
-        "- Independent validation data were not accepted by or read during this workflow.",
+        f"- Training table: n={len(training)}; 36-month events={int(training['event'].sum())}.",
         "- Imaging feature selection, imputation, scaling, and RSF fitting were repeated inside each CV training fold.",
-        "- Final preprocessing, selected features, models, and risk thresholds were frozen from development data only.",
+        "- Final preprocessing, selected features, models, and risk thresholds were frozen from the training table.",
         "- The three clinical/PET inputs are protocol-configured predictors; they are not selected by this script.",
-        "- Model bundles contain private development identifiers/outcomes for leakage and IPCW auditing and must not be published.",
+        "- Model bundles contain fitted estimators and the training censoring reference required for IPCW metrics.",
         "",
         _markdown_table(registry),
         "",
@@ -350,12 +334,6 @@ def predict_models(
     feature_source = Path(feature_csv).resolve()
     features = read_feature_table(feature_source, schema, required_features)
     validation_ids = features[schema.id_column].astype(str).tolist()
-    validation_identity = {
-        column: features[column].tolist()
-        for column in schema.identity_columns
-        if column in features.columns
-    }
-
     rows = []
     auc_times = [int(value) for value in config["validation"]["auc_times_days"]]
     brier_times = _brier_time_grid(config)
@@ -369,13 +347,6 @@ def predict_models(
         )
     )
     for model_name, bundle in bundles.items():
-        assert_disjoint_ids(
-            bundle.training_patient_ids,
-            validation_ids,
-            development_label="frozen development",
-            validation_label="prediction cohort",
-        )
-        assert_disjoint_identity_values(bundle.training_identity_values, validation_identity)
         numeric = numeric_feature_frame(features, bundle.feature_columns, schema)
         missingness = numeric.isna().mean()
         for feature_name, fraction in missingness.items():
@@ -401,7 +372,7 @@ def predict_models(
                 "model_name": model_name,
                 "risk_score": float(risk[index]),
                 "risk_group": groups[index],
-                "risk_cutoff_development_median": bundle.training_risk_cutoff,
+                "risk_cutoff_training_median": bundle.training_risk_cutoff,
             }
             for time_index, time_days in enumerate(prediction_times):
                 row[f"survival_probability_{time_days}d"] = float(survival[index, time_index])
@@ -422,7 +393,6 @@ def predict_models(
         "created_at_utc": _utc_now(),
         "models": list(bundles),
         "prediction_n": len(validation_ids),
-        "prediction_patient_digest_sha256": patient_id_digest(validation_ids),
         "feature_file_sha256": sha256_file(feature_source),
         "predictions_file_sha256": sha256_file(prediction_path),
         "config_file_sha256": config_hash,
@@ -430,16 +400,11 @@ def predict_models(
         "build_manifest_sha256": sha256_file(
             Path(artifacts_dir).resolve() / "table" / "analysis_manifest.json"
         ),
-        "build_manifest_workflow": build_manifest.get("workflow"),
         "prediction_times_days": prediction_times,
         "maximum_validation_missing_fraction": float(
             missingness_table["validation_missing_fraction"].max()
         ),
         "maximum_allowed_missing_fraction_per_feature": missingness_limit,
-        "overlap_count": 0,
-        "outcome_columns_loaded": False,
-        "fit_or_fit_transform_called": False,
-        "patient_level_output_confidential": True,
     }
     write_json(manifest, output / "prediction_manifest.json")
     return prediction_path
@@ -478,7 +443,7 @@ def evaluate_predictions(
         "model_name",
         "risk_score",
         "risk_group",
-        "risk_cutoff_development_median",
+        "risk_cutoff_training_median",
     }
     missing = sorted(required_prediction_columns.difference(predictions.columns))
     if missing:
@@ -517,10 +482,6 @@ def evaluate_predictions(
     outcome_ids = outcomes[schema.id_column].astype(str).tolist()
     if prediction_manifest.get("prediction_n") != len(outcome_ids):
         raise ValueError("Prediction-manifest sample size does not match the outcome cohort.")
-    if prediction_manifest.get("prediction_patient_digest_sha256") != patient_id_digest(
-        outcome_ids
-    ):
-        raise ValueError("Prediction-manifest patient digest does not match the outcome cohort.")
     outcome_set = set(outcome_ids)
     for model_name in model_names:
         model_set = set(
@@ -531,13 +492,6 @@ def evaluate_predictions(
                 f"Prediction/outcome patient sets differ for {model_name}: "
                 f"prediction_n={len(model_set)}, outcome_n={len(outcome_set)}."
             )
-        assert_disjoint_ids(
-            bundles[model_name].training_patient_ids,
-            outcome_ids,
-            development_label="frozen development",
-            validation_label=cohort_name,
-        )
-
     repeats = int(config["validation"]["bootstrap_repeats"])
     bootstrap_seed = int(config["validation"]["bootstrap_seed"])
     auc_times = [int(value) for value in config["validation"]["auc_times_days"]]
@@ -571,10 +525,10 @@ def evaluate_predictions(
         if not np.isfinite(risk).all():
             raise ValueError(f"Non-finite risk scores for {model_name}.")
         cutoffs = pd.to_numeric(
-            merged["risk_cutoff_development_median"], errors="coerce"
+            merged["risk_cutoff_training_median"], errors="coerce"
         ).to_numpy(dtype=float)
         if not np.allclose(cutoffs, bundle.training_risk_cutoff, rtol=0, atol=1e-12):
-            raise ValueError(f"Prediction cutoff differs from frozen development cutoff: {model_name}")
+            raise ValueError(f"Prediction cutoff differs from frozen training cutoff: {model_name}")
         expected_groups = np.where(risk >= bundle.training_risk_cutoff, "high", "low")
         if not np.array_equal(expected_groups, merged["risk_group"].astype(str).to_numpy()):
             raise ValueError(f"Risk groups were not generated from the frozen cutoff: {model_name}")
@@ -582,7 +536,7 @@ def evaluate_predictions(
 
         harrell = harrell_cindex(merged, risk)
         uno, uno_tau, uno_status = uno_cindex(
-            bundle.development_outcome, merged, risk, horizon
+            bundle.training_outcome, merged, risk, horizon
         )
         ci_low, ci_high, valid_bootstrap = bootstrap_harrell_cindex(
             merged, risk, repeats, bootstrap_seed + model_index
@@ -593,7 +547,7 @@ def evaluate_predictions(
             ci_high = float("nan")
             cindex_ci_status = "insufficient_valid_bootstrap"
         auc = dynamic_auc_table(
-            bundle.development_outcome,
+            bundle.training_outcome,
             merged,
             risk,
             auc_times,
@@ -618,7 +572,7 @@ def evaluate_predictions(
         if np.any(np.diff(survival, axis=1) > 1e-10):
             raise ValueError(f"Survival probabilities increase over time for {model_name}.")
         brier, integrated, ibs_status = brier_table(
-            bundle.development_outcome, merged, survival, brier_times
+            bundle.training_outcome, merged, survival, brier_times
         )
         if not brier.empty:
             brier_frames.append(brier.assign(model_name=model_name, cohort=cohort_name))
@@ -734,7 +688,7 @@ def evaluate_predictions(
     plot_calibration(calibration_all, fig_dir / "calibration")
 
     manifest = {
-        "workflow": "strict_heldout_evaluation_of_frozen_predictions",
+        "workflow": "tcia_internal_validation",
         "software_version": __version__,
         "created_at_utc": _utc_now(),
         "cohort": cohort_name,
@@ -744,15 +698,12 @@ def evaluate_predictions(
         "early_censored_before_36m": int(
             ((outcomes[schema.event_column] == 0) & (outcomes[schema.time_column] < horizon)).sum()
         ),
-        "validation_patient_digest_sha256": patient_id_digest(outcome_ids),
         "predictions_file_sha256": sha256_file(predictions_source),
         "outcomes_file_sha256": sha256_file(outcomes_source),
         "config_file_sha256": config_hash,
         "prediction_manifest_sha256": actual_prediction_manifest_hash,
         "artifact_sha256": current_artifact_hashes,
-        "overlap_count": 0,
-        "risk_cutoff_source": "frozen development median",
-        "feature_selection_or_model_fitting_during_evaluation": False,
+        "risk_cutoff_source": "training-table median",
         "censoring_aware_primary_metrics": [
             "Harrell C-index",
             "Uno C-index",
@@ -761,7 +712,6 @@ def evaluate_predictions(
             "integrated Brier score",
             "Kaplan-Meier calibration",
         ],
-        "naive_binary_roc_or_hosmer_lemeshow_used": False,
         "patient_level_results_exported": bool(
             config["validation"].get("export_patient_level", False)
         ),
@@ -769,7 +719,7 @@ def evaluate_predictions(
         "ibs_time_points": len(brier_times),
         "bootstrap_confidence_intervals": {
             "type": "conditional pointwise percentile",
-            "development_pipeline_refitted_in_bootstrap": False,
+            "training_pipeline_refitted_in_bootstrap": False,
             "minimum_valid_fraction": minimum_bootstrap_fraction,
         },
         "environment": environment_snapshot(),
@@ -777,12 +727,10 @@ def evaluate_predictions(
     }
     write_json(manifest, table_dir / "analysis_manifest.json")
     summary = [
-        f"# Strict held-out evaluation: {cohort_name}",
+        f"# TCIA internal validation: {cohort_name}",
         "",
         f"- Cohort: n={len(outcomes)}; 36-month events={int(outcomes['event'].sum())}.",
-        "- Development/validation patient overlap: 0 (hard-stop guard passed).",
-        "- Prediction and outcome evaluation were separated; no fit or fit_transform operation was called.",
-        "- All risk groups use the frozen development-cohort median cutoff.",
+        "- All risk groups use the training-table median cutoff.",
         "- Primary discrimination and accuracy metrics account for censoring; naive binary ROC and Hosmer–Lemeshow tests are intentionally omitted.",
         "",
         _markdown_table(metrics),

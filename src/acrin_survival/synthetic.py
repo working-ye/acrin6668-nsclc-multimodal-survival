@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Tuple
 
 import numpy as np
 import pandas as pd
-
-
-def _fingerprint(label: str) -> str:
-    return hashlib.sha256(label.encode("utf-8")).hexdigest()
 
 
 def make_synthetic_cohort(prefix: str, n: int, seed: int) -> pd.DataFrame:
@@ -49,10 +44,6 @@ def make_synthetic_cohort(prefix: str, n: int, seed: int) -> pd.DataFrame:
             "ss_metastatic_disease_present_on_pet_before_rt": np.where(
                 metastasis == 1, "yes", "no"
             ),
-            "study_instance_uid": [f"2.25.{seed}{index:05d}1" for index in range(n)],
-            "series_instance_uid": [f"2.25.{seed}{index:05d}2" for index in range(n)],
-            "image_sha256": [_fingerprint(f"{prefix}-image-{index}") for index in range(n)],
-            "roi_sha256": [_fingerprint(f"{prefix}-roi-{index}") for index in range(n)],
         }
     )
     for index in range(8):
@@ -71,16 +62,16 @@ def make_synthetic_cohort(prefix: str, n: int, seed: int) -> pd.DataFrame:
 
 def write_synthetic_data(
     output_dir: str | Path,
-    n_development: int = 120,
+    n_training: int = 120,
     n_validation: int = 60,
     seed: int = 20260629,
 ) -> Tuple[Path, Path]:
     output = Path(output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    development = make_synthetic_cohort("DEV", n_development, seed)
+    training = make_synthetic_cohort("TRAIN", n_training, seed)
     validation = make_synthetic_cohort("VAL", n_validation, seed + 1)
-    development_path = output / "development.csv"
-    validation_path = output / "heldout_validation.csv"
-    development.to_csv(development_path, index=False, encoding="utf-8")
+    training_path = output / "training.csv"
+    validation_path = output / "tcia_internal_validation.csv"
+    training.to_csv(training_path, index=False, encoding="utf-8")
     validation.to_csv(validation_path, index=False, encoding="utf-8")
-    return development_path, validation_path
+    return training_path, validation_path
