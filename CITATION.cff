@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use this software, cite the tagged release and the associated manuscript."
+title: "Strict held-out multimodal survival modeling for ACRIN 6668/RTOG 0235"
+type: software
+authors:
+  - name: "ACRIN 6668/RTOG 0235 Secondary Analysis Study Team"
+version: 0.1.0
+date-released: "2026-08-06"
+license: MIT
+repository-code: "https://github.com/working-ye/acrin6668-nsclc-multimodal-survival"
+keywords:
+  - survival analysis
+  - radiomics
+  - FDG PET/CT
+  - non-small-cell lung cancer
+  - random survival forest
+  - TCIA
+references:
+  - type: data
+    authors:
+      - family-names: Kinahan
+        given-names: Paul
+      - family-names: Muzi
+        given-names: Mark
+      - family-names: Bialecki
+        given-names: Brian
+      - family-names: Herman
+        given-names: Ben
+      - family-names: Coombs
+        given-names: Laura
+    title: "Data from the ACRIN 6668 Trial NSCLC-FDG-PET"
+    year: 2019
+    publisher:
+      name: The Cancer Imaging Archive
+    doi: 10.7937/TCIA.2019.30ILQFCL
+    url: "https://doi.org/10.7937/TCIA.2019.30ILQFCL"

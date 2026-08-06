@@ -1,0 +1,74 @@
+study:
+  name: ACRIN 6668/RTOG 0235 secondary analysis
+  endpoint: 36-month overall survival
+  horizon_days: 1095
+
+schema:
+  id_column: patient_id
+  time_column: overall_survival_days
+  event_column: death_event_overall
+  clinical_pet_features:
+    - le_pre_pet_total_metabolic_tumor_volume
+    - baseline_zubrod_performance_status
+    - ss_metastatic_disease_present_on_pet_before_rt
+  radiomics_prefixes:
+    - rad_tumor_
+    - rad_peri5_
+  deep_feature_prefixes:
+    - dl_swin_
+  # Optional fingerprints catch renamed images or repeated scans across splits.
+  identity_columns:
+    - study_instance_uid
+    - series_instance_uid
+    - image_sha256
+    - roi_sha256
+  feature_encodings:
+    baseline_zubrod_performance_status:
+      type: leading_integer
+    ss_metastatic_disease_present_on_pet_before_rt:
+      type: binary_map
+      values:
+        "yes": 1
+        "no": 0
+        "1": 1
+        "0": 0
+
+models:
+  - CP
+  - CPR
+  - CPRD
+  - RD
+
+feature_selection:
+  top_k_per_imaging_modality: 10
+  maximum_missing_fraction: 0.20
+  minimum_variance: 1.0e-10
+  maximum_absolute_correlation: 0.90
+
+training:
+  cross_validation_seed: 20260629
+  model_random_seeds:
+    CP: 21207110
+    CPR: 21153296
+    CPRD: 20285464
+    RD: 20330496
+  cross_validation_folds: 3
+  n_jobs: -1
+  hyperparameter_grid:
+    n_estimators: [100, 200]
+    min_samples_leaf: [3, 5, 10]
+    max_features: [sqrt, 0.3]
+    max_depth: [null]
+
+validation:
+  bootstrap_repeats: 2000
+  bootstrap_seed: 20260727
+  auc_times_days: [365, 730, 1095]
+  brier_start_days: 365
+  brier_end_days: 1095
+  brier_step_days: 30
+  calibration_bins: 5
+  calibration_min_bin_size: 8
+  maximum_missing_fraction_per_feature: 0.20
+  minimum_bootstrap_valid_fraction: 0.90
+  export_patient_level: false
